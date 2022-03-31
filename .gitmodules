@@ -1,0 +1,3 @@
+[submodule "zig-curses"]
+	path = zig-curses
+	url = https://github.com/bivoje/zig-curses.git

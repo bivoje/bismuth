@@ -14,6 +14,10 @@ pub fn build(b: *std.build.Builder) void {
     const exe = b.addExecutable("bismuth", "src/main.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
+    exe.linkSystemLibrary("c");
+    exe.linkSystemLibrary("ncursesw");
+    exe.addIncludeDir("zig-curses/src");
+    exe.addPackagePath("zig-curses", "zig-curses/src/curses.zig");
     exe.install();
 
     const run_cmd = exe.run();

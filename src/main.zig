@@ -66,26 +66,38 @@ fn run() anyerror!void {
     });
 }
 
-fn print_hori_bar(taken8: u32, width: u32) anyerror!void {
+const curses = @import("zig-curses");
+const Window = curses.Window(ColorPair);
+const Screen = curses.Screen(ColorPair);
+
+const ColorPair = enum {
+    Normal,
+};
+
+fn print_hori_bar(win: Window, taken8: u32, width: u32) anyerror!void {
     assert(taken8 <= width * 8);
 
     if (width == 0) return;
 
     var col8: u32 = 8;
+    var i: u16 = 1;
 
     while (col8 < taken8) : (col8 += 8) {
-        try print("\u{2588}", .{});
+        try win.puts_at(i,0,"\u{2588}");
+        i+=1;
     }
 
-    try print("{u}", .{
+    try win.print_at(i,0,"{u}", .{
         if (col8 - taken8 != 8)
             @intCast(u21, 0x2588 + (col8 - taken8))
         else
             ' '
     });
+    i+=1;
 
     while (col8 < width * 8) : (col8 += 8) {
-        try print(" ", .{});
+        try win.puts_at(i,0," "); // TODO putchar?
+        i+=1;
     }
 }
 
@@ -201,6 +213,28 @@ test "bitmanip" {
     }
 }
 
+const c_locale = @cImport(@cInclude("locale.h"));
+
 pub fn main() anyerror!void {
-    try print("bismuth!");
+    _ = c_locale.setlocale(c_locale.LC_ALL, "");
+    var alloc = std.testing.allocator;
+
+    var scr = try Screen.init(alloc, null, null, null);
+    defer scr._deinit();
+    var win = scr.std_window();
+    defer win._deinit();
+
+    _ = try scr.curs_set(.Invisible);
+    //_ = try win.keypad(true);
+
+    var i: u32 = 0;
+    while (i <= 7*8) : (i += 1) {
+        try win.erase();
+        try win.puts_at(0,0,"=|");
+        try print_hori_bar(win, i, 7);
+        try win.puts_at(8,0,"=");
+        try win.refresh();
+        std.time.sleep(100000000); // `sleep` uses nanoseconds,
+    }
+    _ = try win.getch();
 }
