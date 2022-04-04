@@ -74,49 +74,168 @@ const ColorPair = enum {
     Normal,
 };
 
-fn print_hori_bar(win: Window, taken8: u32, width: u32) anyerror!void {
-    assert(taken8 <= width * 8);
+const CursesUI = struct {
+    const Self = @This();
 
-    if (width == 0) return;
+    win: Window,
+    game: *const Game,
 
-    var col8: u32 = 8;
-    var i: u16 = 1;
 
-    while (col8 < taken8) : (col8 += 8) {
-        try win.puts_at(i,0,"\u{2588}");
+    pub fn init(game: Game, win: Window) Self {
+        return .{ .game = game, .win = win };
+    }
+
+
+    pub fn bit_input(self: Self) u8 {
+        const c = try self.win.getch();
+
+        return switch (c) {
+            'p' => 0,
+            'o' => 1,
+            'i' => 2,
+            'u' => 3,
+            'y' => 4,
+            't' => 5,
+            'r' => 6,
+            'e' => 7,
+            'w' => 8,
+            'q' => 9,
+            else => null,
+        };
+    }
+
+
+    pub fn print_hori_bar(self: Self, x: u32, y: u32, taken8: u32, width: u32) anyerror!void {
+        assert(taken8 <= width * 8);
+
+        if (width == 0) return;
+
+        var col8: u32 = 8;
+        var i: u16 = x;
+
+        while (col8 < taken8) : (col8 += 8) {
+            try self.win.puts_at(i,y,"\u{2588}");
+            i+=1;
+        }
+
+        try self.win.print_at(i,y,"{u}", .{
+            if (col8 - taken8 != 8)
+                @intCast(u21, 0x2588 + (col8 - taken8))
+            else
+                ' '
+        });
         i+=1;
+
+        while (col8 < width * 8) : (col8 += 8) {
+            try self.win.puts_at(i,y," "); // TODO putchar?
+            i+=1;
+        }
+    }
+};
+const TextUI = struct {
+    const Self = @This();
+    const IOError = std.os.ReadError || std.os.WriteError || error{EndOfStream};
+
+    game: *Game,
+
+    pub fn init(game: *Game) Self {
+        return .{ .game = game };
     }
 
-    try win.print_at(i,0,"{u}", .{
-        if (col8 - taken8 != 8)
-            @intCast(u21, 0x2588 + (col8 - taken8))
-        else
-            ' '
-    });
-    i+=1;
+    pub fn run(self: Self) IOError!void {
+        const reader = std.io.getStdIn().reader();
 
-    while (col8 < width * 8) : (col8 += 8) {
-        try win.puts_at(i,0," "); // TODO putchar?
-        i+=1;
-    }
-}
+        while (true) {
+            const gauge = self.game.gauge;
+            const num = self.game.num;
+            const nom = self.game.nom;
+            try print("[|{:3}|] <- |{:3}|\tHP: {}\n", .{num, nom, gauge});
 
-test "print_hori_bar" {
-    try print(":", .{});
-    try print_hori_bar(0,0);
-    try print("|\n", .{});
+            const key = while (true) {
+                const b = try reader.readByte();
+                if (self.keymap(b)) |key| break key;
+            } else unreachable;
 
-    var i: u32 = 0;
-    while (i <= 24) : (i += 1) {
-        try print("{d}\t:", .{i});
-        try print_hori_bar(i, 3);
-        try print("|\n", .{});
+            if (!self.game.input(key)) break;
+        }
     }
 
-    try print(":", .{});
-    try print_hori_bar(80,10);
-    try print("|\n", .{});
-}
+    fn keymap(_: Self, c: u8) ?Game.Control {
+        return switch (c) {
+            ';' => .BIT_0,
+            'l' => .BIT_1,
+            'k' => .BIT_2,
+            'j' => .BIT_3,
+            'f' => .BIT_4,
+            'd' => .BIT_5,
+            's' => .BIT_6,
+            'a' => .BIT_7,
+            //'w' => .BIT_8,
+            //'q' => .BIT_9,
+            'q' => .EXIT,
+            else => null,
+        };
+    }
+};
+
+const Game = struct {
+    const Self = @This();
+
+    const Control = enum {
+        BIT_0, BIT_1, BIT_2, BIT_3,
+        BIT_4, BIT_5, BIT_6, BIT_7,
+        BIT_8, BIT_9,
+        EXIT,
+    };
+
+    // FIXME we need atomic!
+    updater: std.Thread,
+    halt_updating: bool = false,
+    random: std.rand.Random,
+    gauge: u8 = 255,
+    num: u16,
+    nom: u16 = 0,
+
+    pub fn alloc(
+        allocator: std.mem.Allocator,
+        prng: *std.rand.DefaultPrng
+    ) !*Self {
+        var self = try allocator.create(Self);
+
+        const random = prng.random();
+        const num = random.int(u8);
+        const updater = try std.Thread.spawn(.{}, Self.update, .{self});
+        self.* = .{
+            .random = random,
+            .num = num,
+            .updater = updater,
+        };
+        return self;
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.halt_updating = true;
+        self.updater.join();
+    }
+
+    fn update(self: *Self) void {
+        while (!self.halt_updating) {
+            std.time.sleep(100_000_000);
+            self.gauge -|= 1;
+        }
+    }
+
+    pub fn input(self: *Self, key: Self.Control) bool {
+        // FIXME return type
+        if (key == .EXIT) return false;
+        self.nom ^= @shlExact(@as(u16, 1), @enumToInt(key));
+        if (self.num == self.nom) {
+            self.num = self.random.int(u8);
+            self.gauge +|= 200;
+        }
+        return true;
+    }
+};
 
 // "█▓▒░ "
 fn print_hori_shadbar(taken: u32, shadA: u32, shadB: u32, shadC: u32, width: u32) anyerror!void {
@@ -186,36 +305,9 @@ test "print_hori_shadbar" {
     try print("|\n", .{});
 }
 
-fn bitmanip(comptime T: type, x: T, key: u8) ?T {
-    return switch (key) {
-        @intCast(u8,'p') => x ^ 1 << 0,
-        @intCast(u8,'o') => x ^ 1 << 1,
-        @intCast(u8,'i') => x ^ 1 << 2,
-        @intCast(u8,'u') => x ^ 1 << 3,
-        @intCast(u8,'y') => x ^ 1 << 4,
-        @intCast(u8,'t') => x ^ 1 << 5,
-        @intCast(u8,'r') => x ^ 1 << 6,
-        @intCast(u8,'e') => x ^ 1 << 7,
-        @intCast(u8,'w') => x ^ 1 << 8,
-        @intCast(u8,'q') => x ^ 1 << 9,
-        else => null,
-    };
-}
-
-test "bitmanip" {
-    const stdin = std.io.getStdIn().reader();
-    var x: u8 = 0;
-    while (true) {
-        try print("{b}\n", .{x});
-        const key = stdin.readByte() catch {break;};
-        if (key == @intCast(u8,' ')) break;
-        x = bitmanip(u8, x, key) orelse x;
-    }
-}
-
 const c_locale = @cImport(@cInclude("locale.h"));
 
-pub fn main() anyerror!void {
+pub fn main_curses() anyerror!void {
     _ = c_locale.setlocale(c_locale.LC_ALL, "");
     var alloc = std.testing.allocator;
 
@@ -231,10 +323,21 @@ pub fn main() anyerror!void {
     while (i <= 7*8) : (i += 1) {
         try win.erase();
         try win.puts_at(0,0,"=|");
-        try print_hori_bar(win, i, 7);
+        //try print_hori_bar(win, i, 7);
         try win.puts_at(8,0,"=");
         try win.refresh();
         std.time.sleep(100000000); // `sleep` uses nanoseconds,
     }
     _ = try win.getch();
+}
+
+pub fn main() anyerror!void {
+    var alloc = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(1);
+    var game = try Game.alloc(alloc, &prng);
+    defer alloc.destroy(game);
+    defer game.deinit();
+    var ui = TextUI.init(game);
+
+    try ui.run();
 }
