@@ -5,67 +5,6 @@ const eprint = std.io.getStdErr().writer().print;
 const assert = std.debug.assert;
 const Atomic = std.atomic.Atomic;
 
-fn scatter(n: u64, seed: u64, total_cnt: *Atomic(u64)) anyerror!void {
-    try print("scatter({}, {})\n", .{n, seed});
-    var prng = std.rand.DefaultPrng.init(seed);
-    const random = prng.random();
-
-    var i: u32 = 0;
-    var cnt: u32 = 0;
-    while (i < n) : (i += 1) {
-        // a,b are 31 bit 0 .. 2^31
-        const x = random.uintLessThan(u64, 1<<31);
-        const y = random.uintLessThan(u64, 1<<31);
-
-        // d2 is 62+1 bit
-        const d2 = x*x + y*y;
-
-        //const r = 1 << 30;
-        const r2 = 1 << 62;
-
-        // area is open (not includes boundary)
-        if (d2 < r2) cnt += 1;
-    }
-
-    // access atomic varible in Sequential Consistent mode
-    _ = total_cnt.*.fetchAdd(cnt, .SeqCst);
-    // returns the value stored in total_cnt before
-}
-
-fn run() anyerror!void {
-    var prng = std.rand.DefaultPrng.init(1);
-    const random = prng.random();
-
-    const total_dots: u64 = 100_000_000;
-    var total_cnt: Atomic(u64) = Atomic(u64).init(0);
-
-    const nthread = std.Thread.getCpuCount() catch return;
-    var threads = [_]std.Thread{undefined} ** 32;
-
-    try print("running with {d} threads over {d} dots...\n", .{ nthread, total_dots });
-    var it: usize = 0;
-    while (it < nthread) : (it += 1) {
-        const seed = random.int(u64);
-        const num = if (it != nthread - 1) total_dots / nthread
-                    else total_dots - (total_dots / nthread) * (nthread - 1);
-                    // the last thread collects leftovers
-        threads[it] = std.Thread.spawn(.{}, scatter, .{num, seed, &total_cnt}) catch |se| {
-            try print("spawn error {}\n", .{se});
-            return;
-        };
-    }
-
-    it = 0;
-    while (it < nthread) : (it += 1) {
-        threads[it].join();
-    }
-
-    try print("all: {d}; in: {d}; pi: {}\n", .{
-        total_dots, total_cnt.load(.SeqCst),
-        4.0*@intToFloat(f32, total_cnt.load(.SeqCst))/@intToFloat(f32, total_dots)
-    });
-}
-
 const curses = @import("zig-curses");
 const Window = curses.Window(ColorPair);
 const Screen = curses.Screen(ColorPair);
@@ -132,7 +71,8 @@ const CursesUI = struct {
         }
     }
 };
-const TextUI = struct {
+
+const AnsiUI = struct {
     const Self = @This();
     const IOError = std.os.ReadError || std.os.WriteError || error{EndOfStream};
 
@@ -149,7 +89,7 @@ const TextUI = struct {
             const gauge = self.game.gauge;
             const num = self.game.num;
             const nom = self.game.nom;
-            try print("[|{:3}|] <- |{:3}|\tHP: {}\n", .{num, nom, gauge});
+            try print("\x1b[0G\x1b[K[|{:3}|] <- |{:3}|\tHP: {}", .{num, nom, gauge});
 
             const key = while (true) {
                 const b = try reader.readByte();
@@ -157,6 +97,97 @@ const TextUI = struct {
             } else unreachable;
 
             if (!self.game.input(key)) break;
+        }
+        try print("\n", .{});
+    }
+
+    fn keymap(_: Self, c: u8) ?Game.Control {
+        return switch (c) {
+            ';' => .BIT_0,
+            'l' => .BIT_1,
+            'k' => .BIT_2,
+            'j' => .BIT_3,
+            'f' => .BIT_4,
+            'd' => .BIT_5,
+            's' => .BIT_6,
+            'a' => .BIT_7,
+            //'w' => .BIT_8,
+            //'q' => .BIT_9,
+            'q' => .EXIT,
+            else => null,
+        };
+    }
+};
+
+const TextUI = struct {
+    const Self = @This();
+    const IOError = std.os.ReadError || std.os.WriteError || error {EndOfStream, StreamTooLong};
+
+    game: *Game,
+
+    pub fn init(game: *Game) Self {
+        return .{ .game = game };
+    }
+
+    //pub fn run(self: Self) IOError!void {
+    pub fn run(self: Self) anyerror!void {
+        const reader = std.io.getStdIn().reader();
+        var buf :[128]u8 = undefined;
+
+        while (true) {
+            const gauge = self.game.gauge;
+            const num = self.game.num;
+            const nom = self.game.nom;
+            try print("[|{:3}|] <- |{:3}|\tHP: {}\n> ", .{num, nom, gauge});
+
+            const line = reader.readUntilDelimiter(&buf, '\n')
+                catch |err| switch (err) {
+                    error.EndOfStream => return,
+                    error.StreamTooLong => {
+                        try print(":P command too long\n", .{});
+                        continue;
+                    },
+                    else => |e| return e,
+                }
+            ;
+
+            const cmd = Self.parse_command(line) catch |e| {
+                try print(":O Error - {}", .{e});
+                continue;
+            };
+
+            const key = switch (cmd) {
+                .Quit => Game.Control.EXIT,
+                .Bit  => |x| blk: {
+                    if (x > 7) {
+                        try print(":v bit index too big", .{});
+                        continue;
+                    }
+                    break :blk @intToEnum(Game.Control, @enumToInt(Game.Control.BIT_0) + x);
+                },
+            };
+
+            if (!self.game.input(key)) break;
+        }
+    }
+
+    const Command = union(enum) {
+        Quit: void,
+        Bit: u8,
+    };
+
+    fn parse_command(line: []u8) !Command {
+        const cmd = for (line) |c, i| {
+            if (c == ' ') break line[0..i];
+        } else line[0..];
+
+        if (std.mem.eql(u8,cmd,"quit")) {
+            return Command { .Quit = undefined };
+        } else if(std.mem.eql(u8,cmd,"b")) {
+            const x = try std.fmt.parseUnsigned(u8, line[cmd.len+1..], 10);
+            return Command { .Bit = x };
+        } else {
+            return error.UnrecognizedCommand;
         }
     }
 
@@ -178,14 +209,22 @@ const TextUI = struct {
     }
 };
 
+
 const Game = struct {
     const Self = @This();
 
-    const Control = enum {
+    // input sequence component to drive the game.
+    // any user input should be translated into Control by UI.
+    // generally, UI implements configurable keymaps for these values.
+    pub const Control = enum {
         BIT_0, BIT_1, BIT_2, BIT_3,
         BIT_4, BIT_5, BIT_6, BIT_7,
         BIT_8, BIT_9,
         EXIT,
+    };
+
+    pub const Quarks = enum {
+        NO_CLEAR
     };
 
     // FIXME we need atomic!
@@ -195,7 +234,18 @@ const Game = struct {
     gauge: u8 = 255,
     num: u16,
     nom: u16 = 0,
+    quarks: u2 = 0,
 
+    fn hasquark(self: Self, q: Self.Quarks) bool {
+        return (self.quarks >> @enumToInt(q)) & 1 == 1;
+    }
+
+    // allocates Game instance,
+    // this is neccessary to ensure that the updator thread gets
+    // correct instance. if `game` were not pointer, it would be
+    // on the stack and it's address may be different with what is
+    // given to the spawned thread after return.
+    // and thus, the caller owns the memory, which has to be freed manually.
     pub fn alloc(
         allocator: std.mem.Allocator,
         prng: *std.rand.DefaultPrng
@@ -213,6 +263,9 @@ const Game = struct {
         return self;
     }
 
+    // halts update routine & joins updator thread.
+    // must be called before destroying..
+    // FIXME can't deinit call destroy by itself?
     pub fn deinit(self: *Self) void {
         self.halt_updating = true;
         self.updater.join();
@@ -232,6 +285,9 @@ const Game = struct {
         if (self.num == self.nom) {
             self.num = self.random.int(u8);
             self.gauge +|= 200;
+            if (!self.hasquark(.NO_CLEAR)) {
+                self.nom = 0;
+            }
         }
         return true;
     }
@@ -337,7 +393,8 @@ pub fn main() anyerror!void {
     var game = try Game.alloc(alloc, &prng);
     defer alloc.destroy(game);
     defer game.deinit();
-    var ui = TextUI.init(game);
+    //var ui = TextUI.init(game);
+    var ui = AnsiUI.init(game);
 
     try ui.run();
 }
