@@ -1,0 +1,52 @@
+#!/bin/bash
+
+function show_figlet() {
+  ifs=IFS
+  IFS=''
+  printf "\x1b[H" # goto 0,0
+  while read -r line; do
+    printf "\x1b[${1}C%s\n" "$line"
+  done < <(figlet -d figlet-fonts -f "$2" "${3:-epsylx=4286?}")
+  IFS="$ifs"
+}
+
+function show_list() {
+  printf "\x1b[H" # goto 0,0
+  printf "\x1b[7m${fonts[0]}\x1b[0m\n"
+  for font in "${fonts[@]:1:10}"; do
+    printf "${font}\n"
+  done
+}
+
+
+readarray -t fonts < $1
+#fonts=( "${fonts[@]:0:5}" )
+fonts_len=${#fonts[@]}
+fonts_le=$((fonts_len-1))
+
+stty -echo cbreak
+tput civis
+
+while true; do
+
+  clear
+  show_list 
+  show_figlet 20 "${fonts[0]}" $2
+
+  read -n1 key
+
+  if [ "$key" == "q" ]; then
+    break
+  fi
+
+  if [ "$key" == "6" ]; then
+    fonts=( "${fonts[@]:1}" "${fonts[0]}" )
+  fi
+
+  if [ "$key" == "4" ]; then
+    fonts=( "${fonts[$fonts_le]}" "${fonts[@]:0:$fonts_le}" )
+  fi
+done
+
+stty echo -cbreak
+tput cnorm

@@ -1,0 +1,39 @@
+#!/bin/bash
+
+touch last
+last=`cat last`
+
+IFS=$'\n'
+for font in `ls figlet-fonts/*.flf figlet-fonts/*.tlf`; do
+  if [ -n "$last" ]; then
+    if [ "$last" == $font ]; then
+      last=''
+    else
+      continue
+    fi
+  fi
+
+  echo ===================================================
+  echo "$font"
+  echo ---------------------------------------------------
+  figlet -d figlet-fonts -f "$font" "epsylx=4286?"
+
+  read aa
+  if [ "$aa" == "q" ]; then
+    break
+  fi
+
+  echo "$font" > last
+
+  if [ "$aa" == "b" ]; then
+    echo "$font" >> big_num
+  fi
+
+  if [ "$aa" == "s" ]; then
+    echo "$font" >> small_num
+  fi
+
+  if [ "$aa" == "t" ]; then
+    echo "$font" >> texts
+  fi
+done

@@ -1,3 +1,6 @@
 [submodule "zig-curses"]
 	path = zig-curses
 	url = https://github.com/bivoje/zig-curses.git
+[submodule "fontselect/figlet-fonts"]
+	path = fontselect/figlet-fonts
+	url = https://github.com/xero/figlet-fonts.git
