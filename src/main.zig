@@ -13,63 +13,137 @@ const ColorPair = enum {
     Normal,
 };
 
+
+// may not reder properly with some fonts.
+// verified with Cascadida Mono
+// https://docs.microsoft.com/ko-kr/windows/terminal/cascadia-code
 const CursesUI = struct {
     const Self = @This();
 
     win: Window,
-    game: *const Game,
+    game: *Game,
 
+    width: u16,
+    height: u16,
 
-    pub fn init(game: Game, win: Window) Self {
-        return .{ .game = game, .win = win };
+    pub fn init(game: *Game, win: Window) Self {
+        return .{ .game = game, .win = win, .width = 30, .height = 7 };
     }
 
-
-    pub fn bit_input(self: Self) u8 {
-        const c = try self.win.getch();
-
+    fn keymap(_: Self, c: c_int) ?Game.Control {
         return switch (c) {
-            'p' => 0,
-            'o' => 1,
-            'i' => 2,
-            'u' => 3,
-            'y' => 4,
-            't' => 5,
-            'r' => 6,
-            'e' => 7,
-            'w' => 8,
-            'q' => 9,
+            ';' => .BIT_0,
+            'l' => .BIT_1,
+            'k' => .BIT_2,
+            'j' => .BIT_3,
+            'f' => .BIT_4,
+            'd' => .BIT_5,
+            's' => .BIT_6,
+            'a' => .BIT_7,
+            //'w' => .BIT_8,
+            //'q' => .BIT_9,
+            'q' => .EXIT,
             else => null,
         };
     }
 
+    pub fn run(self: Self) !void {
+        self.win.timeout(0); // nonblocking
+        while (true) {
+            try self.draw_all();
+            try self.win.refresh();
 
-    pub fn print_hori_bar(self: Self, x: u32, y: u32, taken8: u32, width: u32) anyerror!void {
-        assert(taken8 <= width * 8);
+            const b = self.win.getch() orelse continue;
+            if (self.keymap(b)) |key|
+                if (!self.game.input(key)) break;
 
-        if (width == 0) return;
-
-        var col8: u32 = 8;
-        var i: u16 = x;
-
-        while (col8 < taken8) : (col8 += 8) {
-            try self.win.puts_at(i,y,"\u{2588}");
-            i+=1;
-        }
-
-        try self.win.print_at(i,y,"{u}", .{
-            if (col8 - taken8 != 8)
-                @intCast(u21, 0x2588 + (col8 - taken8))
-            else
-                ' '
-        });
-        i+=1;
-
-        while (col8 < width * 8) : (col8 += 8) {
-            try self.win.puts_at(i,y," "); // TODO putchar?
-            i+=1;
+            std.time.sleep(100_000_000);
         }
     }
+
+    pub fn draw_all(self: Self) !void {
+        try curses.painter.unicode_draw_box(self.win, 0, 0, self.width-3, self.height-3);
+        try self.win.puts_at(self.width-1, 1, "ਊ");
+        try self.draw_number();
+        try self.draw_gauge();
+        try self.draw_bits();
+    }
+
+    fn draw_gauge(self: Self) !void {
+        const gauge = @intCast(u16, self.game.gauge);
+        const width = (self.width-3) * 8 * gauge / 255;
+
+        try curses.painter.draw_line(self.win, 1, self.height-1, self.width-3, " ", " ", " ");
+        try curses.painter.unicode_draw_hori_bar(self.win, 1, self.height-1, width);
+    }
+
+    fn draw_number(self: Self) !void {
+        var buf: [4]u4 = undefined;
+        buf[0] = @intCast(u4, self.game.num);
+        try Self.smbraille_font.renders_atmid(self.win, (self.width-1)/2, (self.height-1)/2, buf[0..1]);
+    }
+
+    fn draw_bits(self: Self) !void {
+        const x = (self.width-1)/2 - 2;
+        const y = self.height-2;
+        var i: u16 = 0;
+        const nom = self.game.nom;
+        while (i < 4) : (i+=1) {
+            try self.win.puts_at(x+i, y, if ((nom >> 3-@intCast(u4,i)) & 1 == 1) "x" else " ");
+        }
+    }
+
+    const NumFont = struct {
+        charmap: []const u8,
+        width: u16,
+        height: u16,
+        charwidth: u16 = 3,
+
+        fn render_at(self: NumFont, win: Window, x: u16, y: u16, n: u4) !void  {
+            var k: u16 = 0;
+            while (k < self.height) : (k += 1) {
+                const s = (self.width*self.charwidth*16+1)*k + self.width*self.charwidth*n;
+                try win.puts_at(x, y+k, self.charmap[s .. s+self.charwidth*self.width]);
+            }
+        }
+
+        fn renders_atmid(self: NumFont, win: Window, mx:u16, my: u16, ns: []const u4) !void {
+            var x = mx - (@intCast(u16,ns.len) * self.width) / 2;
+            var y = my - (self.height) / 2;
+
+            for (ns) |n| {
+                try self.render_at(win, x, y, n);
+                x += self.width;
+            }
+        }
+    };
+
+    const future_font = NumFont {
+        .width = 3, .height = 3,
+        .charmap = // figlet font future.tlf, using FIGURE SPACE (U+2007) for space
+        \\┏━┓╺┓ ┏━┓┏━┓╻ ╻┏━╸┏━┓┏━┓┏━┓┏━┓┏━┓┏┓ ┏━╸╺┳┓┏━╸┏━╸
+        \\┃┃┃ ┃ ┏━┛╺━┫┗━┫┗━┓┣━┓  ┃┣━┫┗━┫┣━┫┣┻┓┃   ┃┃┣╸ ┣╸ 
+        \\┗━┛╺┻╸┗━╸┗━┛  ╹┗━┛┗━┛  ╹┗━┛┗━┛╹ ╹┗━┛┗━╸╺┻┛┗━╸╹  
+        \\
+    };
+
+    const smbraille_font = NumFont {
+        .width = 3, .height = 2,
+        .charmap = // figlet font smbraille.tlf, using FIGURE SPACE (U+2007) for space
+        \\⣎⣵ ⢺  ⠊⡱ ⢉⡹ ⢇⣸ ⣏⡉ ⣎⡁ ⠉⡹ ⢎⡱ ⢎⣱ ⢀⣀ ⣇⡀ ⢀⣀ ⢀⣸ ⢀⡀ ⣰⡁ 
+        \\⠫⠜ ⠼⠄ ⠮⠤ ⠤⠜  ⠸ ⠤⠜ ⠣⠜ ⠸  ⠣⠜ ⠠⠜ ⠣⠼ ⠧⠜ ⠣⠤ ⠣⠼ ⠣⠭ ⢸  
+        \\
+    };
+
+    const broadwaykb_font = NumFont {
+        .width = 5, .height = 4, .charwidth = 1,
+        .charmap = // figlet font broadway_kb.flf, using FIGURE SPACE (U+2007) for space
+        \\ ___   _  ??????????????????????????????????????????????????????????????????????
+        \\/ / \ / | ??????????????????????????????????????????????????????????????????????
+        \\\_\_/ |_| ??????????????????????????????????????????????????????????????????????
+        \\          ??????????????????????????????????????????????????????????????????????
+        \\
+    };
 };
 
 const AnsiUI = struct {
@@ -82,6 +156,12 @@ const AnsiUI = struct {
         return .{ .game = game };
     }
 
+    fn show_quark(q: Game.Quark) []const u8{
+        return switch (q) {
+            .NO_CLEAR => "ਊ",
+        };
+    }
+
     pub fn run(self: Self) IOError!void {
         const reader = std.io.getStdIn().reader();
 
@@ -89,7 +169,7 @@ const AnsiUI = struct {
             const gauge = self.game.gauge;
             const num = self.game.num;
             const nom = self.game.nom;
-            try print("\x1b[0G\x1b[K[|{:3}|] <- |{:3}|\tHP: {}", .{num, nom, gauge});
+            try print("\x1b[0G\x1b[K[|{:3}|] <- |{b:0>8}|\tHP: {}", .{num, nom, gauge});
 
             const key = while (true) {
                 const b = try reader.readByte();
@@ -138,7 +218,7 @@ const TextUI = struct {
             const gauge = self.game.gauge;
             const num = self.game.num;
             const nom = self.game.nom;
-            try print("[|{:3}|] <- |{:3}|\tHP: {}\n> ", .{num, nom, gauge});
+            try print("[|{:3}|] <- |{b:0>8}|\tHP: {}\n> ", .{num, nom, gauge});
 
             const line = reader.readUntilDelimiter(&buf, '\n')
                 catch |err| switch (err) {
@@ -223,7 +303,7 @@ const Game = struct {
         EXIT,
     };
 
-    pub const Quarks = enum {
+    pub const Quark = enum {
         NO_CLEAR
     };
 
@@ -236,7 +316,7 @@ const Game = struct {
     nom: u16 = 0,
     quarks: u2 = 0,
 
-    fn hasquark(self: Self, q: Self.Quarks) bool {
+    fn hasquark(self: Self, q: Self.Quark) bool {
         return (self.quarks >> @enumToInt(q)) & 1 == 1;
     }
 
@@ -253,7 +333,7 @@ const Game = struct {
         var self = try allocator.create(Self);
 
         const random = prng.random();
-        const num = random.int(u8);
+        const num = 0xF & random.int(u8);
         const updater = try std.Thread.spawn(.{}, Self.update, .{self});
         self.* = .{
             .random = random,
@@ -273,7 +353,7 @@ const Game = struct {
 
     fn update(self: *Self) void {
         while (!self.halt_updating) {
-            std.time.sleep(100_000_000);
+            std.time.sleep(80_000_000);
             self.gauge -|= 1;
         }
     }
@@ -283,8 +363,8 @@ const Game = struct {
         if (key == .EXIT) return false;
         self.nom ^= @shlExact(@as(u16, 1), @enumToInt(key));
         if (self.num == self.nom) {
-            self.num = self.random.int(u8);
-            self.gauge +|= 200;
+            self.num = 0xf & @intCast(u8,self.random.int(u6));
+            self.gauge +|= 20;
             if (!self.hasquark(.NO_CLEAR)) {
                 self.nom = 0;
             }
@@ -393,8 +473,33 @@ pub fn main() anyerror!void {
     var game = try Game.alloc(alloc, &prng);
     defer alloc.destroy(game);
     defer game.deinit();
-    //var ui = TextUI.init(game);
-    var ui = AnsiUI.init(game);
 
-    try ui.run();
+    const mode = 2;
+
+    switch (mode) {
+        0 => {
+            var ui = TextUI.init(game);
+            try ui.run();
+        },
+        1 => {
+            var ui = AnsiUI.init(game);
+            try ui.run();
+        },
+        2 => {
+            _ = c_locale.setlocale(c_locale.LC_ALL, "");
+
+            var scr = try Screen.init(alloc, null, null, null);
+            defer scr._deinit();
+            var win = scr.std_window();
+            defer win._deinit();
+
+            _ = try scr.curs_set(.Invisible);
+            _ = try win.keypad(true);
+            _ = try scr.echo(false);
+
+            var ui = CursesUI.init(game, win);
+            try ui.run();
+        },
+        else => unreachable,
+    }
 }
