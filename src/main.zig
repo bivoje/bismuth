@@ -503,3 +503,8 @@ pub fn main() anyerror!void {
         else => unreachable,
     }
 }
+
+// operation candidates..
+// unary: shift, inv, hex2bin, dec2bin, dec2hex?
+// binary ops: arithmatics (+,-), bitwise: (&,|,^)
+//
